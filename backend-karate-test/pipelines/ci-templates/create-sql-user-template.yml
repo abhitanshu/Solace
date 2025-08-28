@@ -1,0 +1,187 @@
+parameters:
+  #####################################################################################
+  #               Basic settings, don't change                                        #
+  #####################################################################################
+  - name: urlResource
+    default: 'https://dsmapi.ep-selfservice.azure.rabo.cloud'    # You don't need to adjust this variable
+  - name: linuxAgentPoolName  
+    default: 'Rabo-Linux-Production'                             # Rabobank Azure Devops Linux agents
+  - name: windowsAgentPoolName
+    default: 'Rabo-Windows-Production'                           # Rabobank Azure Devops Windows agents
+  - name: azureCompliantServicesArtifactVersion
+    default: '0.0.240'                                           # CompliantAzureServices project related variables
+  #####################################################################################
+  #               Basic settings, MUST BE CHANGED WITH YOUR VALUES !!!                #
+  #####################################################################################
+  - name: serviceConnectionName                       # A valid deploy service principal created by CCC. This service principal needs to be owner or contributor of the SQL server.
+    type: string
+  - name: resourceGroupName                           # The name of the resource group that SQL server resides
+    type: string
+  - name: sqlServerName                               # The name of the SQL server
+    type: string
+  - name: sqlDatabaseName                             # The name of the SQL database
+    type: string
+  - name: sqlUserName                                 # The name of the AAD group or MI that you need to create in your db
+    type: string
+  - name: env                                         # The environment
+    type: string
+
+###########################################################################################################
+# Stage  - Get SQL Server Principal ID
+#        - Assign Directory Reader Role to the SQL System Managed Identity, using the Server Principal ID
+#        - Check Directory Reader Permission
+#        - Assign your AAD Group / MI with required role in Database as an external provider
+###########################################################################################################
+stages:
+- stage: AssignDirectoryReaderRoleToManagedIdentity_${{ parameters.env }}
+  jobs:
+  - job: 'GetSQLIdentityPrincipalId'
+    pool: 
+      name: '${{ parameters.windowsAgentPoolName }}'
+    steps:
+    
+    # Download specified version of the CCC compliant services modules, required to assign Directory Readers role in a later task
+    - task: UniversalPackages@0
+      displayName: 'Universal download'
+      enabled: true
+      inputs:
+        command: download
+        vstsFeed: 'CompliantAzureServices'
+        vstsFeedPackage: 'compliant-azure-services'
+        vstsPackageVersion: ${{ parameters.azureCompliantServicesArtifactVersion }}
+        downloadDirectory: '$(System.DefaultWorkingDirectory)/feed/Templates'    
+        
+    # Get SQL system assigned identity
+    - task: AzurePowerShell@5
+      displayName: 'Get SQL MI Id'
+      name: GetSQLIdentityPrincipalId
+      inputs:
+        azureSubscription: '${{ parameters.serviceConnectionName }}'
+        ScriptType: 'InlineScript'
+        Inline: |
+          $sql = (Get-AzSqlServer -ResourceGroupName ${{ parameters.resourceGroupName }} -ServerName ${{ parameters.sqlServerName }})
+          $sqlid = $sql.Identity.PrincipalId.Guid
+          Write-Host "##vso[task.setvariable variable=sqlPrincipalId;isoutput=true]$sqlid"
+        azurePowerShellVersion: 'LatestVersion'
+
+    # Call an API to assign "Directory Readers" role to the SQL system assigned MI
+    - task: AzureCLI@2
+      displayName: 'Assign Directory Readers role to the System Assigned Identity'
+      inputs:
+        azureSubscription: '${{ parameters.serviceConnectionName }}'
+        scriptType: ps
+        scriptPath: './feed/Templates/Operations/CallDSM.ps1'
+        arguments: "-urlPath '/api/managedidentity/$(GetSQLIdentityPrincipalId.sqlPrincipalId)/assigndirectoryreadersrole' -urlMethod 'POST' -jsonBody ''' ''' -urlResource '${{ parameters.urlResource }}' -variableStartname 'assignDirectoryReaderRole'"
+        addSpnToEnvironment: true
+  
+  ##################################################################################################
+  # Job: - Check if Directory Reader Role is Assigned to Managed Identity of SQL Server  #
+  ##################################################################################################
+
+  - job: 'CheckSQLDirectoryReaderRole'
+    dependsOn: 
+    - GetSQLIdentityPrincipalId
+    variables:
+      sqlPrincipalId: $[ dependencies.GetSQLIdentityPrincipalId.outputs['GetSQLIdentityPrincipalId.sqlPrincipalId'] ]
+    pool:
+      name: '${{ parameters.linuxAgentPoolName }}'
+    steps:  
+
+      # Directory reader role is required for the sql server to read External providers (AAD users)
+    - task: AzureCLI@1
+      displayName: 'Check Directory Reader Role'
+      name: 'checkAdmin'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          #!/bin/bash
+          # Set counter to 1, this way we can break the while loop after 5 iterations. Each iteration waits for 1 minute if the spn was not found.
+          j=1
+
+          echo "Checking Directory Reader Permission to Managed Identity"
+          DirectoryReaderRoleExists=true
+
+          while [ "$( az ad group member check --group cld.aut.AADRoleDirectoryReaderForSQLMI --member-id $(sqlPrincipalId) --output tsv)" == "False" ]
+          do
+            # Break the loop when j = 5
+            if [[ "$j" == '5' ]]; then
+              echo "ERROR! SQL Server System assigned managed identity does not have Azure Active Directory Readers permission yet!"
+              DirectoryReaderRoleExists=false
+              break
+            fi
+            # 1 minute of sleep before retry 
+            echo "System assigned managed identity does not have Azure Active Directory Readers permission yet, checking again in 60 sec.."
+            sleep 60
+            ((j++))
+          done
+
+          echo "DirectoryReaderRoleFound: ${DirectoryReaderRoleExists}"         
+          echo "##vso[task.setvariable variable=DirectoryReaderRoleFound;isOutput=true]${DirectoryReaderRoleExists}"
+
+  ##################################################################################################
+  # Job: - Create other AAD user group or MI as external user in your SQL DB  #
+  ##################################################################################################
+
+  - job: 'CreateExternalAADUser'
+    dependsOn: 
+    - GetSQLIdentityPrincipalId
+    - CheckSQLDirectoryReaderRole
+    condition: eq(dependencies.CheckSQLDirectoryReaderRole.outputs['checkAdmin.DirectoryReaderRoleFound'], 'true')
+    pool:
+      name: '${{ parameters.linuxAgentPoolName }}'
+    steps:  
+
+      # Get token to connect to SQL 
+    - task: AzureCLI@1
+      displayName: 'Get and publish oauth token'
+      name: 'get_tokenoid'
+      enabled: true
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptLocation: inlineScript
+        inlineScript: |
+          #!/bin/bash
+
+          # get and publish token
+          SQLTKN=$(az account get-access-token --resource=https://database.windows.net/ --query accessToken --output tsv)
+          echo "##vso[task.setvariable variable=SQLTOKEN;issecret=true;isOutput=true]${SQLTKN}"
+
+    - task: AzurePowerShell@5
+      displayName: 'Use powershell to connect to db and Create AAD user'
+      enabled: true
+      name: 'create_AAD_user'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        ScriptType: InlineScript
+        Inline: |
+          
+          Write-Verbose “Create SQL connectionstring”
+          $conn = New-Object System.Data.SqlClient.SQLConnection
+          $conn.ConnectionString = "Server=${{ parameters.sqlServerName }}.database.windows.net;Initial Catalog=${{ parameters.sqlDatabaseName }};Encrypt=True;TrustServerCertificate=False;Connection Timeout=180"
+          $conn.AccessToken = "$(get_tokenoid.SQLTOKEN)"
+          Write-Verbose “Connect to database and execute SQL script”
+          
+          $conn.Open()
+          $query = "
+              IF NOT EXISTS (SELECT name FROM [sys].[database_principals] WHERE name = '${{ parameters.sqlUserName }}')
+              BEGIN
+                  CREATE USER [${{ parameters.sqlUserName }}] FROM EXTERNAL PROVIDER;
+                  ALTER ROLE db_datareader ADD MEMBER [${{ parameters.sqlUserName }}];
+                  ALTER ROLE db_datawriter ADD MEMBER [${{ parameters.sqlUserName }}];
+                  ALTER ROLE db_ddladmin ADD MEMBER [${{ parameters.sqlUserName }}];
+              END
+              ELSE
+              BEGIN
+                  ALTER ROLE db_datareader ADD MEMBER [${{ parameters.sqlUserName }}];
+                  ALTER ROLE db_datawriter ADD MEMBER [${{ parameters.sqlUserName }}];
+                  ALTER ROLE db_ddladmin ADD MEMBER [${{ parameters.sqlUserName }}];
+              END
+          "
+
+          Write-Host $query
+          $command = New-Object -TypeName System.Data.SqlClient.SqlCommand($query, $conn)
+          $Result = $command.ExecuteNonQuery()
+          $conn.Close()
+
+        azurePowerShellVersion: LatestVersion  

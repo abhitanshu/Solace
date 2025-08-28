@@ -1,0 +1,109 @@
+trigger:
+  branches:
+    include:
+    - '*'
+    exclude:
+    - 'develop'
+    - 'main'
+  paths:
+    include:
+    - backend
+    - limit-management
+    exclude:
+    - frontend
+
+pool:
+  name: Rabo-Linux-Production
+
+stages:
+  - stage: PlatformBackendBuildValidation
+    jobs:
+    - job: BuildValidation
+      displayName: 'Validate Platform back-end'
+      timeoutInMinutes: 60
+      workspace:
+        clean: all
+
+      steps:
+        - script: 'chmod 777 ./sp-mssql-data ./limit-mssql-data'
+          displayName: 'Set volume permissions'
+
+        # Build images
+        - script: docker compose build --pull mssql-sp mssql-limit backend limit-management azurite
+          displayName: 'Build docker images'
+
+        # Run checks
+        - script: cd backend && make check-all
+          displayName: 'Run SP backend checks'
+
+        - script: cd limit-management && make check-all
+          displayName: 'Run limit-management checks'
+
+        # Run migrations
+        - script: cd backend && make migrate-up
+          displayName: 'Run SP migrations'
+
+        # Run migrations
+        - script: cd limit-management && make migrate-up
+          displayName: 'Run limit-management migrations'
+
+        # Run tests
+        - script: cd backend && make test
+          displayName: 'Run SP tests'
+
+        # Run tests
+        - script: cd limit-management && make test
+          displayName: 'Run limit-management tests'
+
+        # Get Docker logs
+        - script: |
+            docker logs sp-backend > docker_logs_sp-backend.txt;
+            docker logs sp-limit-management > docker_logs_sp-limit-management.txt;
+            docker logs sp-mssql-db > docker_logs_sp-mssql-db.txt;
+            docker logs limit-mssql-db > docker_logs_limit-mssql-db.txt;
+          displayName: 'Get Docker logs'
+          condition: always()
+          continueOnError: true # Attempt to generate the logs, but don't fail the build over it
+
+        # Publish Docker logs
+        - task: PublishBuildArtifacts@1
+          inputs:
+            pathtoPublish: '$(System.DefaultWorkingDirectory)/docker_logs_sp-backend.txt'
+            artifactName: 'Docker Logs SP'
+            publishLocation: 'Container'
+          condition: always()
+
+        # Publish Docker logs
+        - task: PublishBuildArtifacts@1
+          inputs:
+            pathtoPublish: '$(System.DefaultWorkingDirectory)/docker_logs_sp-mssql-db.txt'
+            artifactName: 'Docker Logs SP'
+            publishLocation: 'Container'
+          condition: always()
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            pathtoPublish: '$(System.DefaultWorkingDirectory)/docker_logs_sp-limit-management.txt'
+            artifactName: 'Docker Logs Limit'
+            publishLocation: 'Container'
+          condition: always()
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            pathtoPublish: '$(System.DefaultWorkingDirectory)/docker_logs_limit-mssql-db.txt'
+            artifactName: 'Docker Logs Limit'
+            publishLocation: 'Container'
+          condition: always()
+
+        # Karate validation
+    - template: ./ci-templates/karate_validation.yml
+      parameters:
+        jobName: 'KarateFunctionalTests'
+        applicationDirectory: 'backend'
+        dockerCompose: 'backend db azurite'
+        applicationToValidate: 'backend'
+        applicationToLog: 'backend'
+        directoryToClean: '/'
+        
+        # frontend validation
+    - template: ./ci-templates/validation_frontend.yml

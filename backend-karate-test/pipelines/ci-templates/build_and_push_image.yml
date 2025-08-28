@@ -1,0 +1,85 @@
+# Template to be used for the frontend and backend, which builds a docker image, pushes this image to the Azure Container Registry and deploys this image from the ACR onto the web container.
+
+#######################################################################################
+#                             parameters                                              #
+#######################################################################################
+parameters:
+  - name: containerRegistrySPN    # Required: The Service connection to the Azure Container Registry
+    type: string
+  - name: azureServiceConnection  # Optional: The Service connection to the subscription
+    type: string
+    default: ''
+  - name: webappName              # Optional: The displayname of the app service (web container), where the docker image will be deployed
+    type: string
+    default: ''
+  - name: buildRepository         # Required: The name of the repository within the Azure Container Registry, example: 'frontend', 'backend', 'limitmanagement'
+    type: string
+  - name: dockerfilePath          # Required: The path to the location of the docker file
+    type: string
+  - name: dockerBuildArgs         # Optional: Arguments used for building the docker image
+    type: string
+    default: ''
+  - name: appEnvironment         # Required: The application environment name
+    type: string
+  - name: useBarnACR              # Optional: Pass this parameter as 'true', in case the docker image build requires a base image from the Azure Container Registry from BARN
+    type: string
+    default: 'false'
+  - name: variableGroup           # Optional: The name of the variable group within Azure DevOps to be used within this template
+    type: string
+    default: ''
+  - name: dependsOn                # Whether this deployment depends on another deployment or job
+    type: string
+    default: ''
+  - name: condition                # If this deployment has a condition on the previous deployment/job
+    type: string
+    default: ''
+
+jobs:
+  - deployment: BuildAndPush_${{ parameters.buildRepository }}
+    displayName: "${{parameters.buildRepository}}: Build and Push image to build ACR"
+    environment: ${{ parameters.appEnvironment }}
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    variables:
+      - ${{ if ne(parameters.variableGroup, '') }}:
+        - group: ${{ parameters.variableGroup }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+            # Generate a docker tag, based on the branch name, the commit hash and the build ID
+            - task: Bash@3
+              displayName: "generate docker tag"
+              inputs:
+                targetType: 'inline'
+                script: |
+                  branch=$(echo "$(Build.SourceBranch)" | sed -r 's:.*/::')               # Picks last part of the branch name after the slash
+                  commitHash=$(echo "$(Build.SourceVersion)" | sed -E 's/(.{8}).*$/\1/')  # Picks the first 8 chars from the Build.SourceVersion
+                  version=$branch-$(Build.BuildId)-$commitHash                            # Build the version variable (string)
+                  version=$(echo $version | sed -r 's/[/]+//g')                           # Remove any possible slashes from the string, as those are not allowed in the docker tag
+
+                  echo "##vso[task.setvariable variable=Version]$version"                 # Set the version for other tasks to use
+                  echo "Docker tag to publish and deploy: $version"
+
+            # Build Docker image
+            - task: Docker@2
+              displayName: "Build Docker image"
+              inputs:
+                containerRegistry: ${{ parameters.containerRegistrySPN }}
+                repository: ${{ parameters.buildRepository }}
+                command: build
+                Dockerfile: ${{ parameters.dockerfilePath }}
+                tags: |
+                  $(Version)
+                arguments: ${{ parameters.dockerBuildArgs }}
+
+            # Push to image onto the Platform Build ACR
+            - task: Docker@2
+              displayName: "Push image to registry"
+              inputs:
+                containerRegistry: ${{ parameters.containerRegistrySPN }}
+                repository: ${{ parameters.buildRepository }}
+                command: push
+                tags: |
+                  $(Version)

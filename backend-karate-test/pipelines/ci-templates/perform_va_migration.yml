@@ -1,0 +1,38 @@
+# This pipeline migrates SQL-server vulnerability assessment to the express configuration
+#######################################################################################
+#                             parameters                                              #
+#######################################################################################
+parameters:
+  - name: azureServiceConnectionId  # Specify the name of the ServiceConnection associated with the DevOps project executing this pipeline
+    type: string
+  - name: subscriptionId            # Specify the Subscription (by Id) of where the SqlServer is deployed
+    type: string
+  - name: resourceGroupName         # Specify the ResourceGroup (by Name) of where the SqlServer is deployed
+    type: string
+  - name: serverName                # Specify the name of the target SqlServer
+    type: string
+  - name: pool                      # Agent pool name of Linux agents
+    type: string         
+
+jobs:
+ - job: 'RunMigrationScript'
+   pool: 
+     name: '${{ parameters.pool }}' 
+   variables:
+     - name: System.Debug  
+       value: false 
+   steps:
+   - task: AzurePowerShell@5
+     displayName: 'Run migration script'
+     inputs:
+       azureSubscription: '${{ parameters.azureServiceConnectionId }}'
+       scriptType: filePath
+       scriptPath: '$(System.DefaultWorkingDirectory)/infrastructure/scripts/MigrateToExpressConfiguration.ps1'
+       scriptArguments:
+        -SubscriptionId ${{ parameters.subscriptionId }} `
+        -ResourceGroupName ${{ parameters.resourceGroupName }} `
+        -ServerName ${{ parameters.serverName }}
+       azurePowerShellVersion: latestVersion
+       pwsh: true
+       addSpnToEnvironment: true
+ 

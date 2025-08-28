@@ -1,0 +1,645 @@
+trigger: none
+
+resources:
+  repositories:
+  - repository: r-barn-yaml-templates
+    type: git
+    name: WR Innovation/r-barn-yaml-templates
+    ref: refs/tags/ci_templates/1.2.5
+
+parameters:
+  - name: DeployToDev
+    type: boolean
+    default: false
+
+  - name: DeployToTest
+    type: boolean
+    default: false
+
+  - name: DeployToUat
+    type: boolean
+    default: false
+
+  - name: deploy_buildACR
+    displayName: "deploy the build ACR: ( true | false )"
+    type: string
+    default : false
+    values:
+      - true
+      - false
+
+  - name: deploy_application
+    displayName: "deploy platform application: ( true | false )"
+    type: string
+    default : true
+    values:
+      - true
+      - false
+
+  - name: deploy_db_express_config
+    displayName: "deploy db express config: ( true | false )"
+    type: string
+    default : false
+    values:
+      - true
+      - false
+
+variables:
+- name: terraformVersion
+  value: '1.7.5'
+- name: deploy_buildACR
+  value: ${{ parameters.deploy_buildACR }}
+- name: deploy_application
+  value: ${{ parameters.deploy_application  }}
+- name: deploy_db_express_config
+  value: ${{ parameters.deploy_db_express_config }}
+- name: DeployToDev
+  value: ${{ parameters.deploytodev }}
+- name: DeployToTest
+  value: ${{ parameters.deploytotest }}
+- name: DeployToUat
+  value: ${{ parameters.deploytouat }}
+
+pool:
+  name: Rabo-Linux-Production
+
+stages:
+## ~ BUILD ACR ~ ###
+- ${{ if eq(variables['deploy_buildACR'], 'true') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stageName: Deploy_Build_Acr
+      variableGroups:
+        - 'l-prd-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: prd-solace-platform-build-acr.tfstate
+      azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-prd-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/build-acr
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+### ~ PREREQUISITES - DEV ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Dev_App_Registration
+      variableGroups:
+        - 'l-dev-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: dev-solace-prereq.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-dev-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/app-registration
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Dev_ADGroup
+      variableGroups:
+        - 'l-dev-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: dev-solace-group.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-dev-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/ad-group
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+### ~ DEV ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Dev_Platform_Infrastructure
+      variableGroups:
+        - 'l-dev-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: dev-solace-platform.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-dev-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/platform-components
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+        - name: base_cidr_block
+          value: $(base_cidr_block)
+        - name: ssl_certificate
+          value: $(ssl_certificate)
+      plansetupsteps:
+      - template: terraform/ssl-certificate-download.yml@r-barn-yaml-templates
+        parameters:
+          SSLCertificateSecureFileName: 'dev_solace_platform_rabobank_com.pfx'
+          SSL_CERTIFICATE_PATH: 'certificate.pfx'
+          terraformEnvironmentDirectory: $(Build.SourcesDirectory)/infrastructure/platform-components
+
+### ~ SQL DATABASE VA CONFIGURATION - DEV ~ ###
+- ${{ if eq(variables['deploy_db_express_config'], 'true') }}:
+  - stage: SQL_VA_Configuration_DEV
+    displayName: 'Dev SQL Database VA Configuration'
+    condition: 'succeeded()'
+    jobs:
+    - template: ./ci-templates/perform_va_migration.yml
+      parameters:
+        pool: 'Rabo-Linux-Production'
+        azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+        subscriptionId: '47546a81-f3c1-4ac9-8444-e78a8449f80b'
+        resourceGroupName: 'rg-dev-rabobank-solace-platform'
+        serverName: 'sqlserver-dev-rabobank-solace-platform'
+
+### ~ COMPLIANCY AND VALIDATION STAGES FOR BACKEND AND FRONTEND ~ ###
+- stage: CompliancyChecksAndValidations
+  displayName: 'Compliancy checks & validations'
+  jobs:
+ ## Compliance Check - Rabo Secret Scanning Extension
+    - job:
+      displayName: 'Rabobank Secret Scanner'
+      pool: Rabo-Kubernetes-Linux-Production-Compliancy
+      steps:
+      - task: secret-scanning-task@0
+        inputs:
+          semgrepExclude: '**/sp-event-handler/**'
+ # Compliancy check - CheckMarx
+    - job: Checkmarx
+      steps:
+      - task: Rabobank Checkmarx@2
+        inputs:
+          CheckmarxService: 'Checkmarx-MSC'                                                  # Service connections
+          excludeFiles: '**/tests/**,**/sp-event-handler/**,**/vitest/**'                    # Excluding tests and other applications that are out of scope for this deployment
+          fullScan: true
+
+ # Compliancy check - NexusIQ - Backend
+    - template: ./ci-templates/nexusiq.yml
+      parameters:
+        jobName: 'NexusIQ_backend'
+        nexusIqServiceConnection: 'Rabobank SCA NexusIQ'
+        applicationId: 'd4f.solaceplatform.api'
+        stage: 'Build'
+        fileExtensions: '**/build.gradle'
+
+ # Compliancy check - NexusIQ - Frontend
+    - template: ./ci-templates/nexusiq.yml
+      parameters:
+        jobName: 'NexusIQ_Frontend'
+        nexusIqServiceConnection: 'Rabobank SCA NexusIQ'
+        applicationId: 'd4f.solaceplatform.frontend'
+        stage: 'Build'
+        fileExtensions: '**/package-lock.json'
+
+# Validation of the backend API
+    - template: ./ci-templates/backend_validation.yml
+      parameters:
+        jobName: 'Backend'
+        applicationDirectory: 'backend'
+        dockerCompose: 'backend db azurite'
+        applicationToValidate: 'backend'
+        applicationToLog: 'backend'
+        directoryToClean: '/'
+        artifactCoverageName: 'coverage_be'
+# Karate validation
+    - template: ./ci-templates/karate_validation.yml
+      parameters:
+        jobName: 'KarateFunctionalTests'
+        applicationDirectory: 'backend'
+        dockerCompose: 'backend db azurite'
+        applicationToValidate: 'backend'
+        applicationToLog: 'backend'
+        directoryToClean: '/'
+# Validation of the Frontend
+    - template: ./ci-templates/validation_frontend.yml
+
+### Push to Build ACR
+- stage: BuildDockerImages
+  displayName: 'Building docker images and pushing to build ACR'
+  dependsOn: 'CompliancyChecksAndValidations'
+  condition: 'succeeded()'
+  jobs:
+    - template: ./ci-templates/build_and_push_image.yml
+      parameters:
+        containerRegistrySPN: 's-acr-solace-platform-build'
+        useBarnACR: 'true'
+        buildRepository: 'backend'
+        dockerfilePath: './backend/Dockerfile'
+        appEnvironment: e-shared-solace-platform-build-acr
+    - template: ./ci-templates/build_and_push_image.yml
+      parameters:
+        containerRegistrySPN: 's-acr-solace-platform-build'
+        buildRepository: 'frontend'
+        appEnvironment: e-shared-solace-platform-build-acr
+        dockerfilePath: '$(System.DefaultWorkingDirectory)/frontend/Dockerfile'
+    - template: ./ci-templates/build_and_push_image.yml
+      parameters:
+        containerRegistrySPN: 's-acr-solace-platform-build'
+        buildRepository: 'limitmanagement'
+        appEnvironment: e-shared-solace-platform-build-acr
+        dockerfilePath: '$(System.DefaultWorkingDirectory)/limit-management/Dockerfile'
+
+### Import & Deploy to the DEV environment
+- ${{ if and(eq(variables.DeploytoDev, 'true'), eq(variables.deploy_application, 'true')) }}:
+  - stage: DeployDEV
+    displayName: 'Dev_Application_Deployment'
+    dependsOn: 'BuildDockerImages'
+    condition: 'succeeded()'
+    jobs:
+  # ## Deploy the backend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          environment_target: 'e-dev-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'dev-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-dev-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-dev-rabobank-solace-platform-backend'
+          destinationAcrName: 'acrdevrabobanksolaceplatform'
+          env: 'dev'
+          buildRepository: 'backend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runbackendDatabaseMigration: 'true'
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_be'
+          applicationName: 'backend'
+          env: 'dev'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-dev-rabobank-solace-platform-backend.azurewebsites.net/health'
+
+  ## Deploy the frontend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-dev-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'dev-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-dev-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-dev-rabobank-solace-platform-frontend'
+          destinationAcrName: 'acrdevrabobanksolaceplatform'
+          env: 'dev'
+          buildRepository: 'frontend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_fe'
+          applicationName: 'frontend'
+          env: 'dev'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-dev-rabobank-solace-platform-frontend.azurewebsites.net/health'
+
+  ## Deploy the Limit Management
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-dev-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'dev-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-dev-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-dev-rabobank-solace-platform-limit-management'
+          destinationAcrName: 'acrdevrabobanksolaceplatform'
+          env: 'dev'
+          buildRepository: 'limitmanagement'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runlimitDatabaseMigration: 'true'
+
+### ~ PREREQUISITES - TST ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Test_App_Registration
+      variableGroups:
+        - 'l-tst-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: tst-solace-prereq.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-tst-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/app-registration
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Test_ADGroup
+      variableGroups:
+        - 'l-tst-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: tst-solace-group.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-tst-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/ad-group
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+### ~ TST ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: Test_Platform_Infrastructure
+      variableGroups:
+        - 'l-tst-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: tst-solace-platform.tfstate
+      azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-tst-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/platform-components
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+        - name: base_cidr_block
+          value: $(base_cidr_block)
+        - name: ssl_certificate
+          value: $(ssl_certificate)
+      plansetupsteps:
+      - template: terraform/ssl-certificate-download.yml@r-barn-yaml-templates
+        parameters:
+          SSLCertificateSecureFileName: 'tst_solace_platform_rabobank_com.pfx'
+          SSL_CERTIFICATE_PATH: 'certificate.pfx'
+          terraformEnvironmentDirectory: $(Build.SourcesDirectory)/infrastructure/platform-components
+
+### Import & Deploy to the TST environment
+- ${{ if and(eq(variables.DeploytoTest, 'true'), eq(variables.deploy_application, 'true')) }}:
+  - stage: Deploy_Test
+    displayName: 'Test_Application_Deployment'
+    dependsOn: 'BuildDockerImages'
+    condition: 'succeeded()'
+    jobs:
+  # ## Deploy the backend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          environment_target: 'e-tst-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'tst-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-tst-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-tst-rabobank-solace-platform-backend'
+          destinationAcrName: 'acrtstrabobanksolaceplatform'
+          env: 'tst'
+          buildRepository: 'backend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runbackendDatabaseMigration: 'true'
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_be'
+          applicationName: 'backend'
+          env: 'tst'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-tst-rabobank-solace-platform-backend.azurewebsites.net/health'
+
+  ## Deploy the frontend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-tst-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'tst-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-tst-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-tst-rabobank-solace-platform-frontend'
+          destinationAcrName: 'acrtstrabobanksolaceplatform'
+          env: 'tst'
+          buildRepository: 'frontend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_fe'
+          applicationName: 'frontend'
+          env: 'tst'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-tst-rabobank-solace-platform-frontend.azurewebsites.net/health'
+
+  ## Deploy the Limit Management
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-tst-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'tst-solace-platform-acr-spn'
+          destServiceConnection: 'reg-dev-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-tst-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-tst-rabobank-solace-platform-limit-management'
+          destinationAcrName: 'acrtstrabobanksolaceplatform'
+          env: 'tst'
+          buildRepository: 'limitmanagement'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runlimitDatabaseMigration: 'true'
+
+### ~ SQL DATABASE VA CONFIGURATION - TST ~ ###
+- ${{ if eq(variables['deploy_db_express_config'], 'true') }}:
+  - stage: SQL_VA_Configuration_TST
+    displayName: 'TST SQL Database VA Configuration'
+    condition: 'succeeded()'
+    jobs:
+    - template: ./ci-templates/perform_va_migration.yml
+      parameters:
+        pool: 'Rabo-Linux-Production'
+        azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+        subscriptionId: '47546a81-f3c1-4ac9-8444-e78a8449f80b'
+        resourceGroupName: 'rg-tst-rabobank-solace-platform'
+        serverName: 'sqlserver-tst-rabobank-solace-platform'
+
+### ~ PREREQUISITES - UAT ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stageName: UAT_App_Registration
+      variableGroups:
+        - 'l-uat-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: uat-solace-prereq.tfstate
+      azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-uat-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/app-registration
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: UAT_ADGroup
+      variableGroups:
+        - 'l-uat-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: uat-solace-group.tfstate
+      azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-uat-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/ad-group
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+
+### ~ UAT ~ ###
+- ${{ if eq(variables['deploy_application'], 'false') }}:
+  - template: terraform/plan-apply-oidc.yml@r-barn-yaml-templates
+    parameters:
+      pool: Rabo-Linux-Production
+      stagename: UAT_Platform_Infrastructure
+      variableGroups:
+        - 'l-uat-solace-platform-infra-variables'
+      terraformVersion: $(terraformVersion)
+      launchpadKeyName: uat-solace-platform.tfstate
+      azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+      deploymentEnvironmentName: 'e-uat-solace-platform-infrastructure'
+      terraformEnvironmentDirectory:  $(Build.SourcesDirectory)/infrastructure/platform-components
+      terraformVariables:
+        - name: application_name
+          value: $(application_name)
+        - name: env
+          value: $(env)
+        - name: base_cidr_block
+          value: $(base_cidr_block)
+        - name: ssl_certificate
+          value: $(ssl_certificate)
+      plansetupsteps:
+      - template: terraform/ssl-certificate-download.yml@r-barn-yaml-templates
+        parameters:
+          SSLCertificateSecureFileName: 'uat_solace_platform_rabobank_com.pfx'
+          SSL_CERTIFICATE_PATH: 'certificate.pfx'
+          terraformEnvironmentDirectory: $(Build.SourcesDirectory)/infrastructure/platform-components
+
+### Import & Deploy to the UAT environment
+- ${{ if and(eq(variables.DeploytoUat, 'true'), eq(variables.deploy_application, 'true')) }}:
+  - stage: Deploy_UAT
+    displayName: 'UAT_Application_Deployment'
+    dependsOn: 'BuildDockerImages'
+    condition: 'succeeded()'
+    jobs:
+  # ## Deploy the backend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          environment_target: 'e-uat-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'uat-solace-platform-acr-spn'
+          destServiceConnection: 'reg-prd-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-uat-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-uat-rabobank-solace-platform-backend'
+          destinationAcrName: 'acruatrabobanksolaceplatform'
+          env: 'uat'
+          buildRepository: 'backend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runbackendDatabaseMigration: 'true'
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_be'
+          applicationName: 'backend'
+          env: 'uat'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-uat-rabobank-solace-platform-backend.azurewebsites.net/health'
+
+  ## Deploy the frontend
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-uat-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'uat-solace-platform-acr-spn'
+          destServiceConnection: 'reg-prd-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-uat-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-uat-rabobank-solace-platform-frontend'
+          destinationAcrName: 'acruatrabobanksolaceplatform'
+          env: 'uat'
+          buildRepository: 'frontend'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+      - template: ./ci-templates/health_endpoint_validation.yml
+        parameters:
+          dependsOn: ''
+          jobName: 'validate_health_endpoint_fe'
+          applicationName: 'frontend'
+          env: 'uat'
+          numberAttemptsEndpoint: '5'
+          healthEndpoint: 'https://app-uat-rabobank-solace-platform-frontend.azurewebsites.net/health'
+
+        ## Deploy the Limit Management
+      - template: ./ci-templates/import_and_deploy_image.yml
+        parameters:
+          dependsOn: ''
+          condition: 'succeeded()'
+          environment_target: 'e-uat-solace-platform-deployment'
+          sourceRegistrySPN: 's-acr-solace-platform-build'
+          destinationRegistrySPN: 'uat-solace-platform-acr-spn'
+          destServiceConnection: 'reg-prd-global-solaceplatform (SPN)'
+          sqlMIServiceConnection: 's-uat-solace-platform-sql-spn' # ARM Service Connection Attached to the User Managed Identity of the SQL Server
+          webappName: 'app-uat-rabobank-solace-platform-limit-management'
+          destinationAcrName: 'acruatrabobanksolaceplatform'
+          env: 'uat'
+          buildRepository: 'limitmanagement'
+          buildAcrName: 'acrprdrabobanksolaceplatformbuild'
+          slotName: ''
+          variableGroup: ''
+          runlimitDatabaseMigration: 'true'
+
+### ~ SQL DATABASE VA CONFIGURATION - UAT ~ ###
+- ${{ if eq(variables['deploy_db_express_config'], 'true') }}:
+  - stage: SQL_VA_Configuration_UAT
+    displayName: 'UAT SQL Database VA Configuration'
+    condition: 'succeeded()'
+    jobs:
+    - template: ./ci-templates/perform_va_migration.yml
+      parameters:
+        pool: 'Rabo-Linux-Production'
+        azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+        subscriptionId: '47546a81-f3c1-4ac9-8444-e78a8449f80b'
+        resourceGroupName: 'rg-uat-rabobank-solace-platform'
+        serverName: 'sqlserver-uat-rabobank-solace-platform'

@@ -1,0 +1,72 @@
+  parameters:
+    - name: dependsOn                           # The previous job or deployment this job has depends on
+      type: string
+    - name: healthEndpoint                      # The health endpoint which needs to be validated (i.e. https://hostname.com/health)
+      type: string
+    - name: jobName                             # The name of this job, has to be unique within the stage this job is being used
+      type: string
+    - name: applicationName                     # The name of the application to be used in the displayName, so we can have a clear view on the dashboard
+      type: string
+      default: ''
+    - name: applicationDirectory                # Location of where the application can be found
+      type: string
+      default: 'backend'
+    - name: env                                # Environment where smoke tests are run
+      type: string
+      default: ''
+    - name: numberAttemptsEndpoint              # How many times the health endpoint needs to be checked before failure of this job
+      type: string
+      default: '5'
+
+
+  jobs:
+    - job: ${{ parameters.jobName }}
+      displayName: '${{ parameters.applicationName }}: validate the health endpoint'
+      dependsOn: ${{ parameters.dependsOn }}
+      steps:
+        - task: JavaToolInstaller@0
+          inputs:
+            versionSpec: '11'
+            jdkArchitectureOption: 'x64'
+            jdkSourceOption: 'PreInstalled'
+          displayName: 'Java Installation'
+
+        - script: |
+            retries=0
+            max_retries=${{ parameters.numberAttemptsEndpoint }}
+            while [ $retries -lt $max_retries ]; do
+              echo "Attempt $((retries+1)) of $max_retries"
+              echo "Attempt made at: $(date '+%Y-%m-%d %H:%M:%S')"
+              mvn -f ${{parameters.applicationDirectory}}/../backend-karate-test/pom.xml clean test -Dkarate.healthUrl=${{ parameters.healthEndpoint }} -Dkarate.options="--tags @Smoke"
+              if [ $? -eq 0 ]; then
+                echo "Maven task succeeded."
+                exit 0
+              fi
+              retries=$((retries+1))
+              if [ $retries -lt $max_retries ]; then
+                echo "Waiting for 2 minutes before retrying..."
+                sleep 120
+              fi
+            done
+            echo "Maven task failed after $max_retries attempts."
+            exit 1
+          displayName: 'Run Karate Smoke Tests with Retry Logic'
+          condition: succeededOrFailed()
+          continueOnError: true
+
+        - task: PublishCucumberReport@1
+          displayName: 'Publish Smoke Test Report'
+          condition: succeededOrFailed()
+          inputs:
+            jsonDir: ${{parameters.applicationDirectory}}/../backend-karate-test/target/karate-reports
+            outputPath: ${{parameters.applicationDirectory}}/../backend-karate-test/target/cucumber-html-reports
+            name: ${{ parameters.env }}_${{ parameters.applicationName }}_PLATFORM_Smoke_Tests
+            title: "Smoke Test Execution Report"
+
+        - task: PublishPipelineArtifact@1
+          displayName: "Publish Karate Artifact"
+          condition: succeededOrFailed()
+          inputs:
+            targetPath: ${{parameters.applicationDirectory}}/../backend-karate-test/target/
+            artifactName: ${{ parameters.env }}_${{ parameters.applicationName }}_SmokeTestReport_$(System.JobAttempt)
+            artifactType: "pipeline" # Required. Options: pipeline, filepath. Default value: pipeline

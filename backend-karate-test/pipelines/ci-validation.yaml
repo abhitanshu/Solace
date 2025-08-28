@@ -1,0 +1,20 @@
+
+## Little README:
+
+## You can use this pipeline for a BUILD validation in your branching policies, so that it is triggered whenever you open a PR. 
+## Once set-up, it will also run whenever a PR is being merged to main
+## It is checking the linting, formatting, documentation and runs a static code analysis by Checkov.
+## To be able to run the checks, it is using these files from this repo: pre-commit-ci.yaml (pipelines directory), .pre-commit-config.yaml, .tflint.hcl & checkov-config.yaml (root directory)
+
+trigger:
+  - main
+
+stages:
+  - stage: validationCI
+    displayName: Validate the PR
+    jobs:
+    - template: ./pre-commit-ci.yaml
+      parameters:
+        tf_version: '1.7.5'
+        tflint_version: 'v0.47.0'
+        tfdocs_version: 'v0.17.0'

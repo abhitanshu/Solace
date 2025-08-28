@@ -1,0 +1,24 @@
+branch: master, feature/*
+directory:
+- ./
+download-external-modules: true
+evaluate-variables: true
+external-modules-download-path: .external_modules
+framework: all
+skip-check:
+- CKV_AZURE_36
+- CKV_AZURE_130
+- CKV_AZURE_43
+- CKV_AZURE_56
+- CKV_AZURE_13
+- CKV_AZURE_88
+- CKV_AZURE_80
+- CKV_AZURE_33
+- CKV2_AZURE_1
+- CKV2_AZURE_8
+- CKV2_AZURE_18
+- CKV_AZURE_66
+- CKV_AZURE_65
+- CKV_AZURE_102
+- CKV_AZURE_17
+- CKV_AZURE_145

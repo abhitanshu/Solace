@@ -1,0 +1,125 @@
+parameters:
+  - name: isDeployment # If this parameter is true, then publish the test and report
+    default: false
+  - name: jobName # Name of the job
+    type: string
+  - name: applicationToValidate # Name of the application to validate
+    type: string
+  - name: applicationToLog # Name of the application to publish its logs
+    type: string
+  - name: dockerCompose # Name of the service names to compose
+    type: string
+  - name: applicationDirectory # Location of where the application can be found
+    type: string
+  - name: directoryToClean # Location where the .pyc files can be found for cleanup
+    type: string
+
+jobs:
+  - job: BuildValidation_${{parameters.jobName}}
+    displayName: "Validate ${{parameters.jobName}}"
+    timeoutInMinutes: 60
+    workspace:
+      clean: all
+
+    steps:
+      - script: "chmod 777 ./sp-mssql-data ./limit-mssql-data"
+        displayName: "Set volume permissions"
+
+
+      # Run SP migrations
+      - script: cd backend && make migrate-up
+        displayName: "Run SP migrations"
+
+      # Run limit migrations
+      - script: cd limit-management && make migrate-up
+        displayName: 'Run limit-management migrations'
+
+      # Run back-end & limit (incl dependencies)
+      - script: docker compose up -d mssql-sp backend mssql-limit limit-management
+        displayName: "Build images and run containers"
+        env:
+          SPRING_PROFILES_ACTIVE: noCorda,development
+
+      # Run SP checks
+      - script: cd backend && make check-all
+        displayName: "Run SP checks"
+
+      # Run Limit checks
+      - script: cd limit-management && make check-all
+        displayName: "Run limit-management checks"
+
+      # Run tests
+      - task: JavaToolInstaller@0
+        inputs:
+          versionSpec: "11"
+          jdkArchitectureOption: "x64"
+          jdkSourceOption: "PreInstalled"
+        displayName: "Java Installation"
+
+      - task: Maven@4
+        displayName: "Run Karate Functional Tests"
+        inputs:
+          mavenPomFile: ${{ parameters.applicationDirectory }}/../backend-karate-test/pom.xml
+          goals: "clean test"
+          options: '-Dkarate.options="--tags @Platform"'
+          publishJUnitResults: false
+
+      - task: PublishCucumberReport@1
+        displayName: "Publish Cucumber Report"
+        condition: succeededOrFailed()
+        inputs:
+          jsonDir: ${{ parameters.applicationDirectory }}/../backend-karate-test/target/karate-reports
+          outputPath: ${{ parameters.applicationDirectory }}/../backend-karate-test/target/cucumber-html-reports
+          name: "Platform Functional Tests"
+          title: "Test Execution Report"
+
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish Karate Artifact"
+        condition: succeededOrFailed()
+        inputs:
+          targetPath: ${{ parameters.applicationDirectory }}/../backend-karate-test/target/
+          artifactName: "PlatformKarateReport"
+          artifactType: "pipeline" # Required. Options: pipeline, filepath. Default value: pipeline
+
+      - script: |
+          docker logs sp-${{parameters.applicationToLog}} > docker_logs_${{parameters.applicationToLog}}.txt;
+          docker logs sp-backend > docker_logs_sp-backend.txt;
+          docker logs sp-limit-management > docker_logs_sp-limit-management.txt;
+          docker logs sp-mssql-db > docker_logs_sp-mssql-db.txt;
+          docker logs limit-mssql-db > docker_logs_limit-mssql-db.txt;
+        displayName: "Get Docker logs"
+        condition: always()
+        continueOnError: true # Attempt to generate the logs, but don't fail the build over it
+
+      # Publish Docker logs
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-backend.txt"
+          artifactName: "Docker Logs SP"
+          publishLocation: "Container"
+        condition: always()
+
+      # Publish Docker logs
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-mssql-db.txt"
+          artifactName: "Docker Logs SP DB"
+          publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-limit-management.txt"
+          artifactName: "Docker Logs Limit"
+          publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_limit-mssql-db.txt"
+          artifactName: "Docker Logs Limit DB"
+          publishLocation: "Container"
+        condition: always()
+      - script: docker compose down --rmi all
+        displayName: "Remove Docker images"
+        condition: always()

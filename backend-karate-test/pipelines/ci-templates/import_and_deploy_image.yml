@@ -1,0 +1,144 @@
+# Template to be used for the frontend and backend, which builds a docker image, pushes this image to the Azure Container Registry and deploys this image from the ACR onto the web container.
+
+#######################################################################################
+#                             parameters                                              #
+#######################################################################################
+parameters:
+  - name: environment_target      # Required: The Azure DevOps environment to be used within this deployment.
+    type: string
+    default: ''
+  - name: sourceRegistrySPN       # Required: The Service connection to the Source (Build) Azure Container Registry
+    type: string
+  - name: destinationRegistrySPN  # Required: The Service connection to the Destination (Environment i.e dev, tst, prd) Azure Container Registry
+    type: string
+  - name: destServiceConnection   # Required: The Service connection to the subscription
+    type: string
+  - name: webappName              # Required: The displayname of the app service (web container), where the docker image will be deployed
+    type: string
+    default: ''
+  - name: destinationAcrName      # Required: The displayname of the Azure Container Registry, where the docker image will be placed
+    type: string
+  - name: env                     # Required: The environment where to deploy to. Example: 'dev', 'uat', 'prd'
+    type: string
+  - name: buildRepository         # Required: The name of the repository within the Azure Container Registry, example: 'backend, frontend, limitmanagement'
+    type: string
+  - name: variableGroup           # Optional: The name of the variable group within Azure DevOps to be used within this template
+    type: string
+    default: ''
+  - name: slotName                # The slot of the web service, where the docker image should be deployed at
+    type: string
+    default: ''
+  - name: dependsOn               # Whether this deployment depends on another deployment or job
+    type: string
+    default: ''
+  - name: condition               # If this deployment has a condition on the previous deployment/job
+    type: string
+    default: ''
+  - name: buildAcrName            # Required: The Name of the Acr for the Source Image
+    type: string
+  - name: sqlMIServiceConnection # Required: This is the Service Connection Attached the User Managed Identity of the SQL Server & allows for Database Migration to happen
+    type: string
+    default: 's-$(env)-solace-platform-sql-spn'
+  - name: runbackendDatabaseMigration    # Whether to run the database migration script
+    type: string
+    default: 'false'
+  - name: runlimitDatabaseMigration    # Whether to run the database migration script
+    type: string
+    default: 'false'
+
+jobs:
+  - deployment: BuildAndPush_${{ parameters.buildRepository }}
+    displayName: "${{ parameters.env }}-${{parameters.buildRepository}}: Pull, Push and Deploy image"
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    environment: ${{ parameters.environment_target }}
+    variables:
+      - ${{ if ne(parameters.variableGroup, '') }}:
+        - group: ${{ parameters.variableGroup }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+            # Generate a docker tag, based on the branch name, the commit hash and the build ID
+            - task: Bash@3
+              displayName: "generate docker tag"
+              inputs:
+                targetType: 'inline'
+                script: |
+                  branch=$(echo "$(Build.SourceBranch)" | sed -r 's:.*/::')               # Picks last part of the branch name after the slash
+                  commitHash=$(echo "$(Build.SourceVersion)" | sed -E 's/(.{8}).*$/\1/')  # Picks the first 8 chars from the Build.SourceVersion
+                  version=$branch-$(Build.BuildId)-$commitHash                            # Build the version variable (string)
+                  version=$(echo $version | sed -r 's/[/]+//g')                           # Remove any possible slashes from the string, as those are not allowed in the docker tag
+
+                  echo "##vso[task.setvariable variable=buildVersion]$version"                 # Set the version for other tasks to use
+                  echo "Docker tag to publish and deploy: $version"
+
+            # Pull the Image from the Source Acr to the Pipeline Agent
+            - task: Docker@2
+              displayName: Pull Image from Build Acr
+              inputs:
+                command: pull
+                containerRegistry: ${{ parameters.sourceRegistrySPN }}
+                arguments: ${{ parameters.buildAcrName }}.azurecr.io/${{ parameters.buildRepository }}:$(buildVersion)
+
+            # Rename the pulled Image on the Pipeline Agent to that of the Destination Acr
+            - task: Bash@3
+              displayName: Tag Docker Image With Correct Acr
+              inputs:
+                 targetType: 'inline'
+                 script: |
+                   docker tag ${{ parameters.buildAcrName }}.azurecr.io/${{ parameters.buildRepository }}:$(buildVersion) ${{ parameters.destinationAcrName }}.azurecr.io/${{ parameters.buildRepository }}:$(buildVersion)
+                   docker images
+
+            # Push the Image from the Pipeline Agent Host to the Destination Acr
+            - task: Docker@2
+              displayName: Push Image to Destination Acr ${{ parameters.destinationAcrName }}
+              inputs:
+                containerRegistry: ${{ parameters.destinationRegistrySPN }}
+                repository: ${{ parameters.buildRepository }}
+                command: push
+                tags: $(buildVersion)
+
+            - task: AzureCLI@2
+              inputs:
+                name: aztoken
+                azureSubscription: s-${{ parameters.env }}-solace-platform-sql-spn
+                scriptType: 'bash'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                  docker compose run --no-deps --volume=/agent/_work/_temp/.azclitask:/home/.azuretask \
+                    -e SP_DB_NAME=solace-platform \
+                    -e SP_DB_CONN_STRING="jdbc:sqlserver://sqlserver-${{ parameters.env }}-rabobank-solace-platform.database.windows.net:1433;database=solace-platform;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;Authentication=ActiveDirectoryDefault" \
+                    -e AZURE_CONFIG_DIR=/home/.azuretask \
+                    --rm backend \
+                    ./gradlew update
+              displayName: Run migration script with docker container
+              condition: eq(${{ parameters.runbackendDatabaseMigration }},'true')
+
+            - task: AzureCLI@2
+              inputs:
+                name: aztoken
+                azureSubscription: s-${{ parameters.env }}-solace-platform-sql-spn
+                scriptType: 'bash'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                  echo "Waiting for 1 minute before starting migration..."
+                  sleep 60
+                  docker compose run --no-deps --volume=/agent/_work/_temp/.azclitask:/home/.azuretask \
+                    -e LIMIT_DB_NAME=limit-management \
+                    -e LIMIT_DB_CONN_STRING="jdbc:sqlserver://sqlserver-${{ parameters.env }}-rabobank-solace-platform.database.windows.net:1433;database=limit-management;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;Authentication=ActiveDirectoryDefault" \
+                    -e AZURE_CONFIG_DIR=/home/.azuretask \
+                    --rm limit-management \
+                    ./gradlew update
+              displayName: Run migration script with docker container
+              condition: eq(${{ parameters.runlimitDatabaseMigration }},'true')
+
+            # Deploy the image from the ACR on the app service (web container)
+            - task: AzureWebAppContainer@1
+              displayName: "Deploy Image from Acr ${{ parameters.destinationAcrName }} to Webapp Container"
+              inputs:
+                azureSubscription: ${{ parameters.destServiceConnection }}
+                appName: ${{ parameters.webappName }}
+                containers: '${{ parameters.destinationAcrName }}.azurecr.io/${{ parameters.buildRepository }}:$(buildVersion)'
+                slotName: ${{ parameters.slotName }}

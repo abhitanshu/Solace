@@ -1,0 +1,81 @@
+## This is a ci-template for pre-commit validation pipeline. Please find more information in the ci-validation.yaml in the root directory. 
+
+parameters:
+  tf_version: ''
+  tflint_version: ''
+  tfdocs_version: ''
+
+jobs:
+- job: PreCommitCI
+  displayName: Run pre-commit validation
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: self
+    clean: true
+    persistCredentials: true
+  - script: |
+      set -euxo pipefail
+
+      sudo apt-get install -y git 
+      sudo apt-get update 
+      sudo apt-get install unzip software-properties-common curl
+      sudo apt-get install -y python3-pip python3-dev 
+      curl -L "https://github.com/terraform-docs/terraform-docs/releases/download/${{ parameters.tfdocs_version }}/terraform-docs-${{ parameters.tfdocs_version }}-linux-amd64.tar.gz" -o terraform-docs.tgz && tar -xzf terraform-docs.tgz terraform-docs && rm terraform-docs.tgz && chmod +x terraform-docs && sudo mv terraform-docs /usr/local/bin/
+      curl -L "https://github.com/terraform-linters/tflint/releases/download/${{ parameters.tflint_version }}/tflint_linux_amd64.zip" -o tflint.zip && unzip tflint.zip && rm tflint.zip && sudo mv tflint /usr/local/bin/
+      cd /usr/local/bin
+      ln -s /usr/bin/python3 python
+      pip install --upgrade pip
+      pip install setuptools
+      pip install --no-cache-dir pre-commit
+      pip install --no-cache-dir checkov
+    displayName: "Install dependencies"
+  - script: |
+      terraform=terraform
+      if [ -d $terraform ]; then
+      echo "terraform already installed"
+      else
+      curl -L "https://releases.hashicorp.com/terraform/${{ parameters.tf_version }}/terraform_${{ parameters.tf_version }}_linux_amd64.zip" -o terraform.zip && sudo unzip terraform.zip && rm terraform.zip && sudo mv terraform /usr/local/bin/
+      fi
+    displayName: "Check and install Terraform"
+  - script: |
+      set -euxo pipefail
+
+      terraform version
+      pre-commit --version
+      terraform-docs --version
+      tflint --version
+      checkov --version
+    displayName: "Double-check the hooks"
+    workingDirectory: '$(Build.SourcesDirectory)'
+  - bash: |
+      set -euxo pipefail
+      git config --global credential.helper 'cache --timeout 7200'
+      cat <<EOF | git credential approve
+      url=https://dev.azure.com
+      username=raboweb
+      password=$(System.AccessToken)
+      EOF
+    displayName: "Git credentials"
+  - script: |
+      checkov --config-file ../infrastructure/checkov-config.yaml --output junitxml > $(System.DefaultWorkingDirectory)/Checkov-Report.xml
+    displayName: "Run Checkov analysis"
+    condition: "succeededOrFailed()"
+  - script: |
+      echo "pre-commit run -a"  
+      pre-commit run -a
+      if [ "$?" -eq "1" ]
+      then
+      echo -e "\e[1;31mPlease fix the pre-commit errors locally !\e[0m" && exit 1
+      fi
+    condition: "succeededOrFailed()"
+    displayName: 'Run pre-commit-terraform '
+    workingDirectory: '$(Build.SourcesDirectory)'
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFormat: 'JUnit'
+      testResultsFiles: 'Checkov-Report.xml'
+      failTaskOnFailedTests: true
+      testRunTitle: 'Checkov static code analysis'
+    condition: "succeededOrFailed()"
+    displayName: "Publish Checkov analysis"

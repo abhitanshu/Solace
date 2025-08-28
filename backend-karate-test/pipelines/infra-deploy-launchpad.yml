@@ -1,0 +1,45 @@
+trigger: none
+
+resources:
+  repositories:
+  - repository: r-barn-yaml-templates
+    type: git
+    name: WR Innovation/r-barn-yaml-templates
+    ref: refs/tags/ci_templates/1.2.5
+
+stages:
+#### ~ LAUNCHPAD DEV ~ ####
+- template:  launchpad\tf-launchpad.yml@r-barn-yaml-templates
+  parameters:
+    stageName: 'LaunchpadDEV'
+    variableGroup: 'l-dev-solace-platform-infra-variables'
+    azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+    deploymentEnvironmentName: 'e-dev-solace-platform-infrastructure'
+    resourceGroupName: 'rg-dev-solace-platform-launchpad'
+
+#### ~ LAUNCHPAD TST ~ ####
+- template:  launchpad\tf-launchpad.yml@r-barn-yaml-templates
+  parameters:
+    stageName: 'LaunchpadTST'
+    variableGroup: 'l-tst-solace-platform-infra-variables'
+    azureServiceConnectionId: 'reg-dev-global-solaceplatform (SPN)'
+    deploymentEnvironmentName: 'e-tst-solace-platform-infrastructure'
+    resourceGroupName: 'rg-tst-solace-platform-launchpad'
+
+#### ~ LAUNCHPAD UAT ~ ####
+- template:  launchpad\tf-launchpad.yml@r-barn-yaml-templates
+  parameters:
+    stageName: 'LaunchpadUAT'
+    variableGroup: 'l-uat-solace-platform-infra-variables'
+    azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+    deploymentEnvironmentName: 'e-uat-solace-platform-infrastructure'
+    resourceGroupName: 'rg-uat-solace-platform-launchpad'
+
+#### ~ LAUNCHPAD PRD ~ ####
+- template:  launchpad\tf-launchpad.yml@r-barn-yaml-templates
+  parameters:
+    stageName: 'LaunchpadPRD'
+    variableGroup: 'l-prd-solace-platform-infra-variables'
+    azureServiceConnectionId: 'reg-prd-global-solaceplatform (SPN)'
+    deploymentEnvironmentName: 'e-prd-solace-platform-infrastructures'
+    resourceGroupName: 'rg-prd-solace-platform-launchpad'

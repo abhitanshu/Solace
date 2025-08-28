@@ -1,0 +1,62 @@
+# Gradle
+# Build your Java project and run tests with Gradle using a Gradle wrapper script.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/java
+
+trigger:
+- develop
+
+pool:
+  name: Rabo-Linux-Production
+
+variables:
+  imageName: 'solaceplatformapi'
+  dockerRegistryServiceConnection: 'acr-${{ parameters.enviroment }}-solace-platform-service-connection'
+  containerRegistry: 'acr${{ parameters.enviroment }}solaceplatform.azurecr.io'
+
+parameters:
+  - name: enviroment
+    displayName: "Environment ( dev | uat | prod )"
+    type: string
+    default : dev
+    values:
+      - dev
+      - uat
+      - prod
+
+steps:
+  - task: Gradle@2
+    displayName:  Running unit tests
+    inputs:
+      workingDirectory: ''
+      gradleWrapperFile: 'gradlew'
+      gradleOptions: '-Xmx3072m'
+      javaHomeOption: 'JDKVersion'
+      jdkVersionOption: '1.17'
+      jdkArchitectureOption: 'x64'
+      publishJUnitResults: true
+      testResultsFiles: '**/TEST-*.xml'
+      tasks: 'test  -PexcludeTags=docker -PignoreTestsErrors=true'
+
+  - task: Docker@2
+    displayName: Build and push  solace webapp docker image to container registry
+    inputs:
+      containerRegistry: $(dockerRegistryServiceConnection)
+      repository: $(imageName)
+      command: buildAndPush
+      Dockerfile: Dockerfile
+      tags: |
+        latest
+        $(Build.BuildId)
+
+  - task: Kubernetes@1
+    displayName: Update image with latest build tag
+    inputs:
+      connectionType: Azure Resource Manager
+      azureSubscriptionEndpoint: sub-dev-global-solaceplatform(47546a81-f3c1-4ac9-8444-e78a8449f80b)
+      azureResourceGroup: 'rg-${{ parameters.enviroment }}-solace-platform'
+      kubernetesCluster: 'aks-${{ parameters.enviroment }}-solace-platform'
+      namespace: application
+      command: set
+      arguments: image deployment/solaceplatformapi solaceplatformapi=acr${{ parameters.enviroment }}solaceplatform.azurecr.io/solaceplatformapi:$(Build.BuildId)
+                                                

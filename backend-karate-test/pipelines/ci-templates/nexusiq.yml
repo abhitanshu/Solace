@@ -1,0 +1,33 @@
+---
+parameters:
+  - name: agentPool                           # The agent pool (build agent) to be used for this job
+    type: string
+    default: 'Rabo-Windows-Production'
+  - name: nexusIqServiceConnection            # The service connection to be used, to make a connection to NexusIQ
+    type: string
+    default: 'Rabobank SCA NexusIQ'
+  - name: applicationId                       # Application ID is used to track records in nexusiq
+    type: string
+  - name: stage                               # Stages for policy evaluation on nexusiq server e.g 'proxy,develop,build,stage,release,operate'
+    type: string
+  - name: fileExtensions                      # Paths or relative paths of the extensions/packages to be scanned e.g '/*.js,/.ts,**/.tgz' or for python packages '**/requirements.txt'
+    type: string 
+  - name: jobName                             # The name of this job, has to be unique within this stage
+    type: string
+
+jobs:
+- job: ${{parameters.jobName}}
+  displayName: 'Running ${{parameters.jobName}} vulnerability scan'
+  pool: ${{parameters.agentPool}}  
+  steps:
+  ## This tasks executes the NexusIQ.
+  - task: NexusIqPipelineTask@1
+    displayName: 'CLM analysis on NexusIQ'
+    inputs:
+      nexusIqService: ${{parameters.nexusIqServiceConnection}}
+      applicationId: ${{parameters.applicationId}}
+      stage: ${{parameters.stage}}
+      scanTargets: ${{parameters.fileExtensions}}
+    continueOnError: true
+    condition: succeededOrFailed()
+    enabled: true

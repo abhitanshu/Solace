@@ -1,0 +1,51 @@
+jobs:
+  - job: frontendValidation
+    displayName: "Validate Frontend"
+    pool:
+      name: Rabo-Linux-Production
+    workspace:
+      clean: all
+    steps:
+      - template: install_template.yml
+
+      #      - script: |
+      #          npm install -g -D typescript
+      #          npm run type-check
+      #        workingDirectory: '$(System.DefaultWorkingDirectory)/frontend'
+      #        displayName: 'Checking types'
+
+      - script: "npm run lint --if-present"
+        workingDirectory: "$(System.DefaultWorkingDirectory)/frontend"
+        displayName: "Checking formatting"
+
+      # Run tests which generates a coverage and test report
+      - script: "npm run test:covreport --if-present"
+        workingDirectory: "$(System.DefaultWorkingDirectory)/frontend"
+        displayName: "Running unit tests"
+
+      # Provides insights into outdated packages, this does not fail the pipeline
+      - script: |
+          printf "\033[0;33mChecking for outdated packages...\033[0m\n"
+          OUTDATED=$(npm outdated || true)
+          if [ -n "$OUTDATED" ]; then
+            echo "##vso[task.logissue type=warning]The following packages are outdated:"
+            echo "$OUTDATED"
+          else
+            echo "All packages are up to date."
+          fi
+        workingDirectory: "$(System.DefaultWorkingDirectory)/frontend"
+        displayName: "Check for outdated dependencies"
+
+      # Publishing test report to the Azure Pipeline
+      - task: PublishTestResults@2
+        displayName: "supply test results to pipelines"
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFiles: $(System.DefaultWorkingDirectory)/frontend/reports/junit.xml
+          mergeTestResults: true
+          failTaskOnFailedTests: true
+          testRunTitle: "Frontend Unit Tests"
+
+      - script: "npm run build"
+        workingDirectory: "$(System.DefaultWorkingDirectory)/frontend"
+        displayName: "Verifying build"

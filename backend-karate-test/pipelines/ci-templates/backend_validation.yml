@@ -1,0 +1,116 @@
+parameters:
+  - name: jobName # Name of the job
+    type: string
+  - name: applicationToValidate # Name of the application to validate
+    type: string
+  - name: applicationToLog # Name of the application to publish its logs
+    type: string
+  - name: dockerCompose # Name of the service names to compose
+    type: string
+  - name: applicationDirectory # Location of where the application can be found
+    type: string
+  - name: directoryToClean # Location where the .pyc files can be found for cleanup
+    type: string
+  - name: artifactCoverageName # Name for the artifact which will contain the coverage report
+    type: string
+
+jobs:
+  - job: BuildValidation_${{parameters.jobName}}
+    displayName: "Validate ${{parameters.jobName}}"
+    timeoutInMinutes: 60
+    workspace:
+      clean: all
+
+    steps:
+      - script: "chmod 777 ./sp-mssql-data ./limit-mssql-data"
+        displayName: "Set volume permissions"
+
+      # Build images
+      - script: docker compose build --pull mssql-sp mssql-limit backend limit-management
+        displayName: "Build docker images"
+        env:
+          SPRING_PROFILES_ACTIVE: test,noCorda
+
+      # Run SP checks
+      - script: cd backend && make check-all
+        displayName: "Run SP backend checks"
+
+      # Run Limit checks
+      - script: cd limit-management && make check-all
+        displayName: 'Run limit-management checks'
+
+      # Run SP migrations
+      - script: cd backend && make migrate-up
+        displayName: "Run SP migrations"
+
+
+      # Run Limit migrations
+      - script: cd limit-management && make migrate-up
+        displayName: "Run limit-management migrations"
+
+      # Run SP tests
+      - script: cd backend && make test
+        displayName: "Run SP tests"
+
+      # Run Limit tests
+      - script: cd limit-management && make test
+        displayName: "Run limit-management tests"
+
+      # Get Docker logs
+      - script: |
+          docker logs sp-${{parameters.applicationToLog}} > docker_logs_${{parameters.applicationToLog}}.txt;
+          docker logs sp-backend > docker_logs_sp-backend.txt;
+          docker logs sp-limit-management > docker_logs_sp-limit-management.txt;
+          docker logs sp-mssql-db > docker_logs_sp-mssql-db.txt;
+          docker logs limit-mssql-db > docker_logs_limit-mssql-db.txt;
+        displayName: "Get Docker logs"
+        condition: always()
+        continueOnError: true # Attempt to generate the logs, but don't fail the build over it
+
+      # Publish Docker logs
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-backend.txt"
+          artifactName: "Docker Logs SP"
+          publishLocation: "Container"
+        condition: always()
+
+      # Publish Docker logs
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-mssql-db.txt"
+          artifactName: "Docker Logs SP DB"
+          publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+           pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-limit-management.txt"
+           artifactName: "Docker Logs Limit"
+           publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+           pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_limit-mssql-db.txt"
+           artifactName: "Docker Logs Limit DB"
+           publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_sp-limit-management.txt"
+          artifactName: "Docker Logs Limit"
+          publishLocation: "Container"
+        condition: always()
+
+      - task: PublishBuildArtifacts@1
+        inputs:
+          pathtoPublish: "$(System.DefaultWorkingDirectory)/docker_logs_limit-mssql-db.txt"
+          artifactName: "Docker Logs Limit"
+          publishLocation: "Container"
+        condition: always()
+
+      - script: docker compose down --rmi all
+        displayName: "Remove Docker images"
+        condition: always()
