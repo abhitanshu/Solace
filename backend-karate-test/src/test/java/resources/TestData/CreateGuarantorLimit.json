@@ -1,0 +1,43 @@
+[
+  {
+    "countryId": "To_Be_Replaced_Runtime",
+    "amount": 30.00,
+    "currency": "EUR",
+    "enabled": true,
+    "linkedObligorLimits": [
+      {
+        "obligorId": "To_Be_Replaced_Runtime",
+        "amount": 20.00,
+        "currency": "EUR",
+        "conditions": "condition4"
+      }
+    ]
+  },
+  {
+    "countryId": "To_Be_Replaced_Runtime",
+    "amount": 100.00,
+    "currency": "EUR",
+    "enabled": true,
+    "linkedObligorLimits": [
+      {
+        "obligorId": "To_Be_Replaced_Runtime",
+        "amount": 20.00,
+        "currency": "EUR",
+        "conditions": "condition1"
+      },
+      {
+        "obligorId": "To_Be_Replaced_Runtime",
+        "amount": 50.00,
+        "currency": "EUR",
+        "conditions": "condition2"
+      },
+      {
+        "obligorId": "To_Be_Replaced_Runtime",
+        "amount": 40.00,
+        "currency": "EUR",
+        "conditions": "condition3"
+      }
+    ]
+  }
+
+]

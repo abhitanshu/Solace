@@ -1,0 +1,23 @@
+{
+  "parentCompany": {
+    "name": "MunichRe",
+    "address": "Munich lane 123",
+    "postCode": "1234AB",
+    "city": "Munich",
+    "countryName": "Germany",
+    "officialName": "officialName",
+    "legalForm": "legalForm",
+    "tradeRegister": "tradeRegister",
+    "tradeRegisterId": "tradeRegisterId"
+  },
+  "brokerId": "",
+  "branch":
+  {
+    "name": "Irish Branch",
+    "address": "address",
+    "postCode": "2345ZA",
+    "city": "Dublin",
+    "countryName": "Ireland"
+  },
+  "isActive": true
+}

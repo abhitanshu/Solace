@@ -1,0 +1,32 @@
+{
+  "contractId": "NLU123456",
+  "exposureType": "LETTER_OF_CREDIT",
+  "transactionType": "STANDBY_LC",
+  "lcAmount": 10000.00,
+  "currency": "EUR",
+  "lcIssuanceDate": "2025-06-23",
+  "maturityDate": "2026-11-27",
+  "insured": "CN=Rabobank, OU=TCF, O=Rabobank, L=Utrecht, C=NL",
+  "obligorId": "To_be_replaced",
+  "latestShipmentDate": "2025-11-27",
+  "toleranceLowerLimit": 10,
+  "toleranceUpperLimit": 10,
+  "initialNetCommitment": 11000.00,
+  "tenor": null,
+  "goods": "",
+  "exporter": "",
+  "importer": "",
+  "portOfLoading": "",
+  "portOfDischarge": "",
+  "notes": "notes",
+  "files": [],
+  "originalFee": {
+    "id": "4d0d5043-acdb-4d9f-b7a7-45be85da1223",
+    "type": "CONFIRMATION",
+    "structureType": "PER_ANNUM",
+    "value": 10.00,
+    "referenceAmountType": "GUARANTOR_PARTICIPATION_AMOUNT"
+  },
+  "dealType": "LBRPA_BOOKED",
+  "lcReferenceNumber": ""
+}
