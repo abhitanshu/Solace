@@ -1,0 +1,10 @@
+{
+  "annex_id": "to_be_replaced_runtime",
+  "id": "to_be_replaced_runtime",
+  "type": "Commitment",
+  "structure_type": "PerAnnum",
+  "reference_amount_type": "GuarantorParticipationAmount",
+  "value": 75,
+  "remuneration_percent": 90,
+  "created_by": "maker_abhi@example.com"
+}

@@ -1,0 +1,13 @@
+{
+  "ucp_id": "to_be_replaced_runtime",
+  "annex_id": "to_be_replaced_runtime",
+  "guarantor_participation_percentage": 70,
+  "guarantor_participation_amount": 10000,
+  "structure_type": "Percentage",
+  "status": "Confirmed",
+  "version": 1.0,
+  "deal_type": "LBRPA_BOOKED",
+  "created_by": "maker_abhi@example.com",
+  "created_at": "2020-05-12T00:00:00+00:00"
+}
+

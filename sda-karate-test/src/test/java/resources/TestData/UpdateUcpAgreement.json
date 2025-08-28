@@ -1,0 +1,16 @@
+{
+  "guarantor_name": "MunichRe",
+  "participation_reference_number": "currency-check",
+  "effective_date": "To_be_replaced",
+  "end_date": "2025-08-01",
+  "maturity_date": "To_be_replaced",
+  "currency": "to_be_replaced_runtime",
+  "cedent_name": "Coöperatieve Rabobank U.A. ",
+  "status": "Confirmed",
+  "guarantor_address": "Königinstr. 107 80802 Munich",
+  "guarantor_country": "Germany",
+  "cedent_net_commitment": 325000,
+  "initial_guarantor_participation_amount": 225000,
+  "updated_at": "2023-05-13T00:00:00+00:00"
+}
+

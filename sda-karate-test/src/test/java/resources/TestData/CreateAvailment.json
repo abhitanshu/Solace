@@ -1,0 +1,22 @@
+{
+  "contract_code": "to_be_replaced_runtime",
+  "day": "2022-01-01",
+  "payment_amount": 1000,
+  "payment_type": null,
+  "payment_type_description": null,
+  "value_date": "2024-03-02",
+  "available_amount": 250000,
+  "liability_utilization_amount": 1000,
+  "utilization_amount": 150000,
+  "outstanding_liability_amount": 250000,
+  "maximum_contract_amount": 400000,
+  "released_liability_amount": 0,
+  "available_confirmed_amount": 450000,
+  "unconfirmed_payment_amount": 0,
+  "available_undertaking_amount": 0,
+  "not_undertaken_payment_amount": 0,
+  "available_unconfirmed_amount": 0,
+  "event_date": "2024-03-02",
+  "event_code": "BISS",
+  "event_sequence_number": 7
+}

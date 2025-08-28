@@ -1,0 +1,24 @@
+{
+  "ucp_id": "a368a8f9-109b-4b51-9bf1-3b4e07581c5f",
+  "guarantor_name": "MunichRe",
+  "participation_reference_number": "currency-check",
+  "effective_date": "To_be_replaced",
+  "end_date": "2025-08-01",
+  "maturity_date": "To_be_replaced",
+  "currency": "to_be_replaced_runtime",
+  "obligor_number": 1,
+  "cedent_name": "Coöperatieve Rabobank U.A. ",
+  "participation_amount": 250000,
+  "total_risk_participation_amount": 300000,
+  "contract_code": "to_be_replaced_runtime",
+  "original_cedent_net_commitment": 350000,
+  "payment_schedule_frequency": "AtMaturity",
+  "status": "Confirmed",
+  "created_by": "front_office@example.com",
+  "created_at": "2023-05-13T00:00:00+00:00",
+  "guarantor_address": "Königinstr. 107 80802 Munich",
+  "guarantor_country": "Germany",
+  "cedent_net_commitment": 325000,
+  "initial_guarantor_participation_amount": 225000
+}
+
